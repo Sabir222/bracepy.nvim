@@ -27,22 +27,10 @@ M.config = {
     brace_style = 'curly',  -- 'curly', 'square', 'round'
     highlight_group = 'Comment',
     position = 'end_of_line',  -- 'end_of_line', 'below_line', 'inline'
-    icons = {
-        function_start = '{ func',
-        function_end = 'func }',
-        class_start = '{ class',
-        class_end = 'class }',
-        loop_start = '{ loop',
-        loop_end = 'loop }',
-        conditional_start = '{ if',
-        conditional_end = 'if }',
-        try_start = '{ try',
-        try_end = 'try }',
-    }
 }
 
 -- Function to get the appropriate brace characters based on config
-local function get_brace_chars(brace_type)
+local function get_brace_chars()
     local config = M.config
     if config.brace_style == 'curly' then
         return '{', '}'
@@ -120,14 +108,30 @@ local function get_python_structures(bufnr)
         local capture_name = query.captures[id]
         local start_row, start_col, end_row, end_col = node:range()
         
-        table.insert(structures, {
-            type = capture_name,
-            start_row = start_row,
-            start_col = start_col,
-            end_row = end_row,
-            end_col = end_col,
-            node = node
-        })
+        -- Determine if this is a valid structure to visualize
+        local structure_type = nil
+        if capture_name == 'function.name' and M.config.show_function_braces then
+            structure_type = 'function'
+        elseif capture_name == 'class.name' and M.config.show_class_braces then
+            structure_type = 'class'
+        elseif (capture_name == 'loop') and M.config.show_loop_braces then
+            structure_type = 'loop'
+        elseif (capture_name == 'conditional') and M.config.show_conditional_braces then
+            structure_type = 'conditional'
+        elseif (capture_name == 'exception') and M.config.show_try_braces then
+            structure_type = 'exception'
+        end
+        
+        if structure_type then
+            table.insert(structures, {
+                type = structure_type,
+                start_row = start_row,
+                start_col = start_col,
+                end_row = end_row,
+                end_col = end_col,
+                node = node
+            })
+        end
     end
 
     return structures
@@ -140,47 +144,29 @@ local function structures_to_virtual_text(structures)
     for _, struct in ipairs(structures) do
         local start_brace, end_brace = nil, nil
         local highlight = M.config.highlight_group
+        local open_char, close_char = get_brace_chars()
 
-        -- Determine the type of structure and appropriate braces
-        if struct.type == 'function.name' and M.config.show_function_braces then
-            local open_brace, close_brace = get_brace_chars('function')
-            start_brace = { { open_brace .. ' func', highlight }, { ' }' .. close_brace, highlight } }
-            end_brace = { { open_brace .. ' end_func', highlight }, { ' }' .. close_brace, highlight } }
-        elseif struct.type == 'class.name' and M.config.show_class_braces then
-            local open_brace, close_brace = get_brace_chars('class')
-            start_brace = { { open_brace .. ' class', highlight }, { ' }' .. close_brace, highlight } }
-            end_brace = { { open_brace .. ' end_class', highlight }, { ' }' .. close_brace, highlight } }
-        elseif struct.type == 'loop' and M.config.show_loop_braces then
-            local open_brace, close_brace = get_brace_chars('loop')
-            start_brace = { { open_brace .. ' loop', highlight }, { ' }' .. close_brace, highlight } }
-            end_brace = { { open_brace .. ' end_loop', highlight }, { ' }' .. close_brace, highlight } }
-        elseif struct.type == 'conditional' and M.config.show_conditional_braces then
-            local open_brace, close_brace = get_brace_chars('conditional')
-            start_brace = { { open_brace .. ' if', highlight }, { ' }' .. close_brace, highlight } }
-            end_brace = { { open_brace .. ' end_if', highlight }, { ' }' .. close_brace, highlight } }
-        elseif struct.type == 'exception' and M.config.show_try_braces then
-            local open_brace, close_brace = get_brace_chars('exception')
-            start_brace = { { open_brace .. ' try', highlight }, { ' }' .. close_brace, highlight } }
-            end_brace = { { open_brace .. ' end_try', highlight }, { ' }' .. close_brace, highlight } }
-        end
+        -- Add opening brace at the start of the structure
+        start_brace = { { ' ' .. open_char, highlight } }
+        
+        -- Add closing brace at the end of the structure
+        end_brace = { { close_char .. ' ', highlight } }
 
-        if start_brace then
-            table.insert(virt_text_items, {
-                row = struct.start_row,
-                col = struct.start_col,
-                virt_text = start_brace,
-                pos = 'eol'
-            })
-        end
+        -- Add opening brace
+        table.insert(virt_text_items, {
+            row = struct.start_row,
+            col = struct.start_col,
+            virt_text = start_brace,
+            pos = 'eol'
+        })
 
-        if end_brace then
-            table.insert(virt_text_items, {
-                row = struct.end_row,
-                col = 0,
-                virt_text = end_brace,
-                pos = 'eol'
-            })
-        end
+        -- Add closing brace
+        table.insert(virt_text_items, {
+            row = struct.end_row,
+            col = 0,
+            virt_text = end_brace,
+            pos = 'eol'
+        })
     end
 
     return virt_text_items

@@ -4,7 +4,7 @@ A Neovim plugin that shows virtual braces for Python code blocks, making Python 
 
 ## Features
 
-- Shows virtual braces for Python functions, classes, loops, conditionals, and exception handling
+- Shows simple virtual braces `{` and `}` for Python functions, classes, loops, conditionals, and exception handling
 - Customizable brace styles (curly, square, round)
 - Configurable colors and positioning
 - Toggle on/off functionality
@@ -79,18 +79,6 @@ require('bracepy').setup({
   brace_style = 'curly',                   -- 'curly', 'square', 'round'
   highlight_group = 'Comment',             -- Highlight group for the braces
   position = 'end_of_line',                -- Position: 'end_of_line', 'below_line', 'inline'
-  icons = {                               -- Custom icons for different code blocks
-    function_start = '{ func',
-    function_end = 'func }',
-    class_start = '{ class',
-    class_end = 'class }',
-    loop_start = '{ loop',
-    loop_end = 'loop }',
-    conditional_start = '{ if',
-    conditional_end = 'if }',
-    try_start = '{ try',
-    try_end = 'try }',
-  }
 })
 ```
 

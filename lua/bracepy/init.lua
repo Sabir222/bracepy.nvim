@@ -4,7 +4,7 @@
 
 local M = {}
 
--- Create namespaces for different types of virtual text
+-- Create namespace for virtual text
 local namespace = vim.api.nvim_create_namespace('bracepy')
 
 -- Store extmark IDs by buffer for management
@@ -27,20 +27,25 @@ M.config = {
     brace_style = 'curly',  -- 'curly', 'square', 'round'
     highlight_group = 'Comment',
     position = 'end_of_line',  -- 'end_of_line', 'below_line', 'inline'
+    icons = {
+        function_start = '{ func',
+        function_end = 'func }',
+        class_start = '{ class',
+        class_end = 'class }',
+        loop_start = '{ loop',
+        loop_end = 'loop }',
+        conditional_start = '{ if',
+        conditional_end = 'if }',
+        try_start = '{ try',
+        try_end = 'try }',
+        except_start = '{ except',
+        except_end = 'except }',
+        else_start = '{ else',  
+        else_end = 'else }',
+        elif_start = '{ elif',
+        elif_end = 'elif }',
+    }
 }
-
--- Function to get the appropriate brace characters based on config
-local function get_brace_chars()
-    local config = M.config
-    if config.brace_style == 'curly' then
-        return '{', '}'
-    elseif config.brace_style == 'square' then
-        return '[', ']'
-    elseif config.brace_style == 'round' then
-        return '(', ')'
-    end
-    return '{', '}'
-end
 
 -- Function to clear extmarks for a specific buffer
 local function clear_buffer_extmarks(bufnr)
@@ -69,8 +74,8 @@ local function safe_set_extmark(bufnr, row, col, opts)
     end
 end
 
--- Function to identify Python code blocks using treesitter
-local function get_python_structures(bufnr)
+-- Function to identify Python code blocks and their relationships using treesitter
+local function get_all_structures(bufnr)
     local structures = {}
     
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr, 'python')
@@ -85,106 +90,353 @@ local function get_python_structures(bufnr)
     end
 
     local root = lang_tree[1]:root()
+    
+    -- Query to capture all code constructs with detailed information
     local query = vim.treesitter.query.parse('python', [[
-        [
-            (function_definition 
-                name: (identifier) @function.name
-                body: (block) @function.body)
-            (class_definition 
-                name: (identifier) @class.name
-                body: (block) @class.body)
-            (for_statement) @loop
-            (while_statement) @loop
-            (if_statement) @conditional
-            (elif_clause) @conditional
-            (else_clause) @conditional
-            (try_statement) @exception
-            (except_clause) @exception
-            (with_statement) @context
-        ]
+        (function_definition
+            name: (identifier) @function.name
+            body: (block) @function.body) @function.definition
+
+        (class_definition
+            name: (identifier) @class.name
+            body: (block) @class.body) @class.definition
+
+        (for_statement
+            body: (block) @loop.body) @loop.statement
+
+        (while_statement
+            body: (block) @loop.body) @loop.statement
+
+        (if_statement
+            condition: (_) @if.condition
+            consequence: (block) @if.body
+            alternative: [
+                (elif_clause condition: (_) @elif.condition body: (block) @elif.body)
+                (else_clause body: (block) @else.body)
+            ]*) @if.statement
+
+        (try_statement
+            body: (block) @try.body) @try.statement
+
+        (except_clause
+            body: (block) @except.body) @except.statement
     ]])
 
     for id, node in query:iter_captures(root, bufnr, 0, -1) do
         local capture_name = query.captures[id]
-        local start_row, start_col, end_row, end_col = node:range()
         
-        -- Determine if this is a valid structure to visualize
-        local structure_type = nil
-        if capture_name == 'function.name' and M.config.show_function_braces then
-            structure_type = 'function'
-        elseif capture_name == 'class.name' and M.config.show_class_braces then
-            structure_type = 'class'
-        elseif (capture_name == 'loop') and M.config.show_loop_braces then
-            structure_type = 'loop'
-        elseif (capture_name == 'conditional') and M.config.show_conditional_braces then
-            structure_type = 'conditional'
-        elseif (capture_name == 'exception') and M.config.show_try_braces then
-            structure_type = 'exception'
-        end
-        
-        if structure_type then
-            table.insert(structures, {
-                type = structure_type,
-                start_row = start_row,
-                start_col = start_col,
-                end_row = end_row,
-                end_col = end_col,
-                node = node
-            })
+        if capture_name == 'function.definition' and M.config.show_function_braces then
+            local start_row, start_col = node:start()
+            -- Find the function name and body
+            local name = nil
+            local body_node = nil
+            for child in node:iter_children() do
+                if child:type() == 'identifier' then
+                    name = vim.treesitter.get_node_text(child, bufnr)
+                elseif child:type() == 'block' then
+                    body_node = child
+                end
+            end
+            
+            if body_node then
+                local _, _, _, _ = body_node:range()
+                local actual_end_row, actual_end_col = body_node:end_()
+                
+                table.insert(structures, {
+                    type = 'function',
+                    subtype = nil,
+                    name = name,
+                    start_row = start_row,
+                    start_col = start_col,
+                    end_row = actual_end_row,
+                    end_col = actual_end_col,
+                    node = node
+                })
+            end
+        elseif capture_name == 'class.definition' and M.config.show_class_braces then
+            local start_row, start_col = node:start()
+            -- Find the class name and body
+            local name = nil
+            local body_node = nil
+            for child in node:iter_children() do
+                if child:type() == 'identifier' then
+                    name = vim.treesitter.get_node_text(child, bufnr)
+                elseif child:type() == 'block' then
+                    body_node = child
+                end
+            end
+            
+            if body_node then
+                local _, _, _, _ = body_node:range()
+                local actual_end_row, actual_end_col = body_node:end_()
+                
+                table.insert(structures, {
+                    type = 'class',
+                    subtype = nil,
+                    name = name,
+                    start_row = start_row,
+                    start_col = start_col,
+                    end_row = actual_end_row,
+                    end_col = actual_end_col,
+                    node = node
+                })
+            end
+        elseif capture_name == 'loop.statement' and M.config.show_loop_braces then
+            local start_row, start_col = node:start()
+            -- Find the loop body
+            local body_node = nil
+            for child in node:iter_children() do
+                if child:type() == 'block' then
+                    body_node = child
+                    break
+                end
+            end
+            
+            if body_node then
+                local _, _, _, _ = body_node:range()
+                local actual_end_row, actual_end_col = body_node:end_()
+                
+                table.insert(structures, {
+                    type = 'loop',
+                    subtype = nil,
+                    name = nil,
+                    start_row = start_row,
+                    start_col = start_col,
+                    end_row = actual_end_row,
+                    end_col = actual_end_col,
+                    node = node
+                })
+            end
+        elseif capture_name == 'if.statement' and M.config.show_conditional_braces then
+            -- For if statements, we need to handle the whole if/elif/else chain
+            local start_row, start_col = node:start()
+            
+            -- Find the main if body
+            local if_body_node = nil
+            local all_alternatives = {} -- Store elif and else blocks
+            
+            for child in node:iter_children() do
+                if child:type() == 'consequence' or child:type() == 'block' then
+                    if_body_node = child
+                elseif child:type() == 'elif_clause' then
+                    table.insert(all_alternatives, {node=child, type='elif'})
+                elseif child:type() == 'else_clause' then
+                    table.insert(all_alternatives, {node=child, type='else'})
+                end
+            end
+            
+            -- Add the main if block
+            if if_body_node then
+                local _, _, _, _ = if_body_node:range()
+                local actual_end_row, actual_end_col = if_body_node:end_()
+                
+                table.insert(structures, {
+                    type = 'conditional',
+                    subtype = 'if',
+                    name = nil,
+                    start_row = start_row,
+                    start_col = start_col,
+                    end_row = actual_end_row,
+                    end_col = actual_end_col,
+                    node = node,
+                    chain_end_row = actual_end_row  -- The end of the entire if/elif/else chain
+                })
+            end
+            
+            -- Add elif and else blocks (they all share the same end row as the main if)
+            for _, alt in ipairs(all_alternatives) do
+                local alt_start_row, alt_start_col = alt.node:start()
+                local _, _, _, _ = alt.node:range()
+                local alt_actual_end_row, alt_actual_end_col = alt.node:end_()
+                
+                table.insert(structures, {
+                    type = 'conditional',
+                    subtype = alt.type,
+                    name = nil,
+                    start_row = alt_start_row,
+                    start_col = alt_start_col,
+                    end_row = actual_end_row,  -- Same end as the main if block
+                    end_col = actual_end_col,
+                    node = alt.node,
+                    chain_end_row = actual_end_row  -- The end of the entire if/elif/else chain
+                })
+            end
+        elseif capture_name == 'try.statement' and M.config.show_try_braces then
+            local start_row, start_col = node:start()
+            -- Find the try body
+            local body_node = nil
+            local all_excepts = {} -- Store except blocks
+            
+            for child in node:iter_children() do
+                if child:type() == 'block' then
+                    body_node = child
+                elseif child:type() == 'except_clause' then
+                    table.insert(all_excepts, child)
+                end
+            end
+            
+            -- Add the main try block
+            if body_node then
+                local _, _, _, _ = body_node:range()
+                local actual_end_row, actual_end_col = body_node:end_()
+                
+                table.insert(structures, {
+                    type = 'exception',
+                    subtype = 'try',
+                    name = nil,
+                    start_row = start_row,
+                    start_col = start_col,
+                    end_row = actual_end_row,
+                    end_col = actual_end_col,
+                    node = node,
+                    chain_end_row = actual_end_row
+                })
+            end
+            
+            -- Add except blocks (they all share the same end row as the try)
+            for _, except_node in ipairs(all_excepts) do
+                local except_start_row, except_start_col = except_node:start()
+                local except_body_node = nil
+                
+                for child in except_node:iter_children() do
+                    if child:type() == 'block' then
+                        except_body_node = child
+                        break
+                    end
+                end
+                
+                if except_body_node then
+                    local _, _, _, _ = except_body_node:range()
+                    local except_actual_end_row, except_actual_end_col = except_body_node:end_()
+                    
+                    table.insert(structures, {
+                        type = 'exception',
+                        subtype = 'except',
+                        name = nil,
+                        start_row = except_start_row,
+                        start_col = except_start_col,
+                        end_row = actual_end_row,  -- Same end as the try block
+                        end_col = actual_end_col,
+                        node = except_node,
+                        chain_end_row = actual_end_row
+                    })
+                end
+            end
         end
     end
 
     return structures
 end
 
--- Convert treesitter structures to virtual text format
-local function structures_to_virtual_text(structures)
-    local virt_text_items = {}
-
+-- Process all structures and generate virtual text markers with proper handling for complex cases
+local function generate_virtual_text(bufnr, structures)
+    local markers = {}
+    
+    -- Create a comprehensive list of all markers (both start and end) for each structure
+    local all_markers = {}
+    
     for _, struct in ipairs(structures) do
-        local start_brace, end_brace = nil, nil
         local highlight = M.config.highlight_group
-        local open_char, close_char = get_brace_chars()
-
-        -- Add opening brace at the start of the structure
-        start_brace = { { ' ' .. open_char, highlight } }
         
-        -- Add closing brace at the end of the structure
-        end_brace = { { close_char .. ' ', highlight } }
-
-        -- Add opening brace
-        table.insert(virt_text_items, {
-            row = struct.start_row,
-            col = struct.start_col,
-            virt_text = start_brace,
-            pos = 'eol'
-        })
-
-        -- Add closing brace
-        table.insert(virt_text_items, {
-            row = struct.end_row,
-            col = 0,
-            virt_text = end_brace,
-            pos = 'eol'
-        })
+        -- Determine labels based on structure type
+        if struct.type == 'function' then
+            table.insert(all_markers, { row = struct.start_row, col = struct.start_col, virt_text = { { ' ' .. M.config.icons.function_start, highlight } }, pos = 'eol', struct_type = 'start' })
+            table.insert(all_markers, { row = struct.end_row, col = 0, virt_text = { { M.config.icons.function_end .. ' ', highlight } }, pos = 'eol', struct_type = 'end' })
+        elseif struct.type == 'class' then
+            table.insert(all_markers, { row = struct.start_row, col = struct.start_col, virt_text = { { ' ' .. M.config.icons.class_start, highlight } }, pos = 'eol', struct_type = 'start' })
+            table.insert(all_markers, { row = struct.end_row, col = 0, virt_text = { { M.config.icons.class_end .. ' ', highlight } }, pos = 'eol', struct_type = 'end' })
+        elseif struct.type == 'loop' then
+            table.insert(all_markers, { row = struct.start_row, col = struct.start_col, virt_text = { { ' ' .. M.config.icons.loop_start, highlight } }, pos = 'eol', struct_type = 'start' })
+            table.insert(all_markers, { row = struct.end_row, col = 0, virt_text = { { M.config.icons.loop_end .. ' ', highlight } }, pos = 'eol', struct_type = 'end' })
+        elseif struct.type == 'conditional' then
+            if struct.subtype == 'if' then
+                table.insert(all_markers, { row = struct.start_row, col = struct.start_col, virt_text = { { ' ' .. M.config.icons.conditional_start, highlight } }, pos = 'eol', struct_type = 'start' })
+                table.insert(all_markers, { row = struct.end_row, col = 0, virt_text = { { M.config.icons.conditional_end .. ' ', highlight } }, pos = 'eol', struct_type = 'end' })
+            elseif struct.subtype == 'elif' then
+                table.insert(all_markers, { row = struct.start_row, col = struct.start_col, virt_text = { { ' ' .. M.config.icons.elif_start, highlight } }, pos = 'eol', struct_type = 'start' })
+                table.insert(all_markers, { row = struct.end_row, col = 0, virt_text = { { M.config.icons.elif_end .. ' ', highlight } }, pos = 'eol', struct_type = 'end' })
+            elseif struct.subtype == 'else' then
+                table.insert(all_markers, { row = struct.start_row, col = struct.start_col, virt_text = { { ' ' .. M.config.icons.else_start, highlight } }, pos = 'eol', struct_type = 'start' })
+                table.insert(all_markers, { row = struct.end_row, col = 0, virt_text = { { M.config.icons.else_end .. ' ', highlight } }, pos = 'eol', struct_type = 'end' })
+            end
+        elseif struct.type == 'exception' then
+            if struct.subtype == 'try' then
+                table.insert(all_markers, { row = struct.start_row, col = struct.start_col, virt_text = { { ' ' .. M.config.icons.try_start, highlight } }, pos = 'eol', struct_type = 'start' })
+                table.insert(all_markers, { row = struct.end_row, col = 0, virt_text = { { M.config.icons.try_end .. ' ', highlight } }, pos = 'eol', struct_type = 'end' })
+            elseif struct.subtype == 'except' then
+                table.insert(all_markers, { row = struct.start_row, col = struct.start_col, virt_text = { { ' ' .. M.config.icons.except_start, highlight } }, pos = 'eol', struct_type = 'start' })
+                table.insert(all_markers, { row = struct.end_row, col = 0, virt_text = { { M.config.icons.except_end .. ' ', highlight } }, pos = 'eol', struct_type = 'end' })
+            end
+        end
+    end
+    
+    -- Group all markers by row and process them
+    local markers_by_row = {}
+    for _, marker in ipairs(all_markers) do
+        if not markers_by_row[marker.row] then
+            markers_by_row[marker.row] = {}
+        end
+        table.insert(markers_by_row[marker.row], marker)
+    end
+    
+    -- Process each row's markers
+    for row, row_markers in pairs(markers_by_row) do
+        -- For each row, determine the appropriate virtual text
+        -- If there are multiple markers for the same row, we need special logic
+        if #row_markers == 1 then
+            -- Single marker, just add it
+            table.insert(markers, row_markers[1])
+        else
+            -- Multiple markers, this is complex - handle if/elif/else and other cases
+            -- For conditionals like "else: if } { else", we need to concatenate the virtual texts
+            local combined_virt_text = {}
+            local pos = 'eol'
+            
+            -- Sort markers by type to ensure proper order (end markers before start markers on same line)
+            table.sort(row_markers, function(a, b)
+                if a.struct_type == 'end' and b.struct_type == 'start' then
+                    return true  -- end markers come first
+                elseif a.struct_type == 'start' and b.struct_type == 'end' then
+                    return false
+                else
+                    return a.col < b.col
+                end
+            end)
+            
+            -- Combine all virtual text segments for this line
+            for _, marker in ipairs(row_markers) do
+                for _, segment in ipairs(marker.virt_text) do
+                    table.insert(combined_virt_text, segment)
+                end
+            end
+            
+            if #combined_virt_text > 0 then
+                table.insert(markers, {
+                    row = row,
+                    col = 0,
+                    virt_text = combined_virt_text,
+                    pos = pos
+                })
+            end
+        end
     end
 
-    return virt_text_items
+    return markers
 end
 
 -- Add virtual text for Python structures
 local function add_structural_virt_text(bufnr)
-    local structures = get_python_structures(bufnr)
-    local virt_text_items = structures_to_virtual_text(structures)
+    local structures = get_all_structures(bufnr)
+    local markers = generate_virtual_text(bufnr, structures)
 
     -- Clear existing extmarks for this buffer
     clear_buffer_extmarks(bufnr)
 
-    -- Add new virtual text for each structure
-    for _, item in ipairs(virt_text_items) do
-        safe_set_extmark(bufnr, item.row, item.col, {
-            virt_text = item.virt_text,
-            virt_text_pos = item.pos,
+    -- Add new virtual text for each marker
+    for _, marker in ipairs(markers) do
+        safe_set_extmark(bufnr, marker.row, marker.col, {
+            virt_text = marker.virt_text,
+            virt_text_pos = marker.pos,
             hl_mode = 'combine',
             priority = 1000,
         })

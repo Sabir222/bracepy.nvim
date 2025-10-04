@@ -75,7 +75,7 @@ local function safe_set_extmark(bufnr, row, col, opts)
 end
 
 -- Function to identify Python code blocks and their relationships using treesitter
-local function get_all_structures(bufnr)
+local function get_python_structures(bufnr)
     local structures = {}
     
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr, 'python')
@@ -109,11 +109,14 @@ local function get_all_structures(bufnr)
 
         (if_statement
             condition: (_) @if.condition
-            consequence: (block) @if.body
-            alternative: [
-                (elif_clause condition: (_) @elif.condition body: (block) @elif.body)
-                (else_clause body: (block) @else.body)
-            ]*) @if.statement
+            consequence: (block) @if.body) @if.statement
+
+        (elif_clause
+            condition: (_) @elif.condition
+            (block) @elif.body) @elif.statement
+
+        (else_clause
+            (block) @else.body) @else.statement
 
         (try_statement
             body: (block) @try.body) @try.statement
@@ -211,24 +214,18 @@ local function get_all_structures(bufnr)
             -- For if statements, we need to handle the whole if/elif/else chain
             local start_row, start_col = node:start()
             
-            -- Find the main if body
-            local if_body_node = nil
-            local all_alternatives = {} -- Store elif and else blocks
-            
+            -- Get all the main if body
+            local body_node = nil
             for child in node:iter_children() do
-                if child:type() == 'consequence' or child:type() == 'block' then
-                    if_body_node = child
-                elseif child:type() == 'elif_clause' then
-                    table.insert(all_alternatives, {node=child, type='elif'})
-                elseif child:type() == 'else_clause' then
-                    table.insert(all_alternatives, {node=child, type='else'})
+                if child:type() == 'block' or child:type() == 'consequence' then
+                    body_node = child
+                    break
                 end
             end
             
-            -- Add the main if block
-            if if_body_node then
-                local _, _, _, _ = if_body_node:range()
-                local actual_end_row, actual_end_col = if_body_node:end_()
+            if body_node then
+                local _, _, _, _ = body_node:range()
+                local actual_end_row, actual_end_col = body_node:end_()
                 
                 table.insert(structures, {
                     type = 'conditional',
@@ -242,40 +239,75 @@ local function get_all_structures(bufnr)
                     chain_end_row = actual_end_row  -- The end of the entire if/elif/else chain
                 })
             end
+        elseif capture_name == 'elif.statement' and M.config.show_conditional_braces then
+            local start_row, start_col = node:start()
             
-            -- Add elif and else blocks (they all share the same end row as the main if)
-            for _, alt in ipairs(all_alternatives) do
-                local alt_start_row, alt_start_col = alt.node:start()
-                local _, _, _, _ = alt.node:range()
-                local alt_actual_end_row, alt_actual_end_col = alt.node:end_()
+            -- Find the elif body
+            local body_node = nil
+            for child in node:iter_children() do
+                if child:type() == 'block' then
+                    body_node = child
+                    break
+                end
+            end
+            
+            if body_node then
+                local _, _, _, _ = body_node:range()
+                
+                -- For elif, we need to find the end of the whole if chain
+                -- For now, just use the body end, but later we'll need to handle chains properly
+                local actual_end_row, actual_end_col = body_node:end_()
                 
                 table.insert(structures, {
                     type = 'conditional',
-                    subtype = alt.type,
+                    subtype = 'elif',
                     name = nil,
-                    start_row = alt_start_row,
-                    start_col = alt_start_col,
-                    end_row = actual_end_row,  -- Same end as the main if block
+                    start_row = start_row,
+                    start_col = start_col,
+                    end_row = actual_end_row,
                     end_col = actual_end_col,
-                    node = alt.node,
-                    chain_end_row = actual_end_row  -- The end of the entire if/elif/else chain
+                    node = node
+                })
+            end
+        elseif capture_name == 'else.statement' and M.config.show_conditional_braces then
+            local start_row, start_col = node:start()
+            
+            -- Find the else body
+            local body_node = nil
+            for child in node:iter_children() do
+                if child:type() == 'block' then
+                    body_node = child
+                    break
+                end
+            end
+            
+            if body_node then
+                local _, _, _, _ = body_node:range()
+                
+                -- For else, we need to find the end of the whole if chain
+                local actual_end_row, actual_end_col = body_node:end_()
+                
+                table.insert(structures, {
+                    type = 'conditional',
+                    subtype = 'else',
+                    name = nil,
+                    start_row = start_row,
+                    start_col = start_col,
+                    end_row = actual_end_row,
+                    end_col = actual_end_col,
+                    node = node
                 })
             end
         elseif capture_name == 'try.statement' and M.config.show_try_braces then
             local start_row, start_col = node:start()
             -- Find the try body
             local body_node = nil
-            local all_excepts = {} -- Store except blocks
-            
             for child in node:iter_children() do
                 if child:type() == 'block' then
                     body_node = child
-                elseif child:type() == 'except_clause' then
-                    table.insert(all_excepts, child)
                 end
             end
             
-            -- Add the main try block
             if body_node then
                 local _, _, _, _ = body_node:range()
                 local actual_end_row, actual_end_col = body_node:end_()
@@ -292,35 +324,86 @@ local function get_all_structures(bufnr)
                     chain_end_row = actual_end_row
                 })
             end
+        elseif capture_name == 'except.statement' and M.config.show_try_braces then
+            local start_row, start_col = node:start()
+            -- Find the except body
+            local body_node = nil
+            for child in node:iter_children() do
+                if child:type() == 'block' then
+                    body_node = child
+                    break
+                end
+            end
             
-            -- Add except blocks (they all share the same end row as the try)
-            for _, except_node in ipairs(all_excepts) do
-                local except_start_row, except_start_col = except_node:start()
-                local except_body_node = nil
+            if body_node then
+                local _, _, _, _ = body_node:range()
+                local actual_end_row, actual_end_col = body_node:end_()
                 
-                for child in except_node:iter_children() do
-                    if child:type() == 'block' then
-                        except_body_node = child
-                        break
-                    end
+                -- For except, all excepts in a try statement end at the same line
+                table.insert(structures, {
+                    type = 'exception',
+                    subtype = 'except',
+                    name = nil,
+                    start_row = start_row,
+                    start_col = start_col,
+                    end_row = actual_end_row,
+                    end_col = actual_end_col,
+                    node = node
+                })
+            end
+        end
+    end
+
+    -- Now we need to identify linked if/elif/else statements to make them end at the same line
+    -- Find the end of the if statement chain
+    local if_structures = {}
+    local all_conditional_structures = {}
+    
+    for _, struct in ipairs(structures) do
+        if struct.type == 'conditional' then
+            table.insert(all_conditional_structures, struct)
+        end
+    end
+    
+    -- Group related conditionals (if/elif/else that form a chain)
+    -- This requires a more complex analysis of the treesitter tree structure
+    -- For now, we'll use a simple heuristic: conditionals that have overlapping or consecutive end positions
+    -- A better approach would be to analyze parent-child relationships in the AST
+    local conditional_groups = {}
+    local processed = {}
+    
+    for i, struct in ipairs(all_conditional_structures) do
+        if not processed[i] then
+            local group = {struct}
+            processed[i] = true
+            
+            -- Find related conditionals that might be part of the same chain
+            local potential_end = struct.end_row
+            
+            for j = i + 1, #all_conditional_structures do
+                if not processed[j] and all_conditional_structures[j].end_row >= potential_end - 2 then
+                    -- Check if they're close together (heuristic)
+                    table.insert(group, all_conditional_structures[j])
+                    processed[j] = true
+                    potential_end = math.max(potential_end, all_conditional_structures[j].end_row)
                 end
-                
-                if except_body_node then
-                    local _, _, _, _ = except_body_node:range()
-                    local except_actual_end_row, except_actual_end_col = except_body_node:end_()
-                    
-                    table.insert(structures, {
-                        type = 'exception',
-                        subtype = 'except',
-                        name = nil,
-                        start_row = except_start_row,
-                        start_col = except_start_col,
-                        end_row = actual_end_row,  -- Same end as the try block
-                        end_col = actual_end_col,
-                        node = except_node,
-                        chain_end_row = actual_end_row
-                    })
-                end
+            end
+            
+            table.insert(conditional_groups, group)
+        end
+    end
+    
+    -- For each group, update the end position to be the maximum for all members
+    for _, group in ipairs(conditional_groups) do
+        if #group > 1 then
+            local max_end_row = 0
+            for _, struct in ipairs(group) do
+                max_end_row = math.max(max_end_row, struct.end_row)
+            end
+            
+            for _, struct in ipairs(group) do
+                struct.end_row = max_end_row
+                struct.chain_end_row = max_end_row
             end
         end
     end
@@ -426,7 +509,7 @@ end
 
 -- Add virtual text for Python structures
 local function add_structural_virt_text(bufnr)
-    local structures = get_all_structures(bufnr)
+    local structures = get_python_structures(bufnr)
     local markers = generate_virtual_text(bufnr, structures)
 
     -- Clear existing extmarks for this buffer

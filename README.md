@@ -21,7 +21,7 @@ A Neovim plugin that shows virtual braces for Python code blocks, making Python 
 
 ```lua
 {
-  'your-username/bracepy.nvim',
+  'your-username/bracepy.nvim',  -- Replace with your actual repository
   ft = 'python',
   opts = {
     -- Optional: custom configuration
@@ -37,6 +37,9 @@ A Neovim plugin that shows virtual braces for Python code blocks, making Python 
   },
 }
 ```
+
+**Alternative installation method (if adding directly to your config)**:
+If you want to install the plugin directly in your Neovim config, place the `lua/bracepy` folder in your Neovim config directory (typically `~/.config/nvim/lua/bracepy/`).
 
 ### Using packer.nvim
 
